@@ -51,6 +51,8 @@ Rules:
 - Highlight what is missing, weak, or vague.
 - Rewrite bullets only based on the existing resume content.
 - Be direct and practical.
+- Also generate a full improved resume draft based only on the existing resume content.
+- You must always return a non-empty "tailored_resume_text" field containing the full updated resume draft.
 
 Return valid JSON only with this schema:
 {{
@@ -69,7 +71,8 @@ Return valid JSON only with this schema:
   ],
   "section_suggestions": [""],
   "red_flags": [""],
-  "final_verdict": ""
+  "final_verdict": "",
+  "tailored_resume_text": ""
 }}
 
 Resume:
@@ -115,10 +118,14 @@ with st.sidebar:
     st.write("1. Upload your resume")
     st.write("2. Paste the job description from Indeed")
     st.write("3. Click Analyze")
-    st.write("4. Review gaps, keywords, and bullet rewrites")
+    st.write("4. Review gaps, keywords, bullet rewrites, and resume comparison")
 
 uploaded_resume = st.file_uploader("Upload resume", type=["pdf", "docx", "txt"])
-job_description = st.text_area("Paste the job description here", height=300, placeholder="Paste the full Indeed job description here...")
+job_description = st.text_area(
+    "Paste the job description here",
+    height=300,
+    placeholder="Paste the full Indeed job description here...",
+)
 
 analyze = st.button("Analyze fit", type="primary", use_container_width=True)
 
@@ -130,6 +137,8 @@ if analyze:
     if not job_description.strip():
         st.error("Please paste the job description.")
         st.stop()
+
+    uploaded_file_bytes = uploaded_resume.getvalue()
 
     try:
         with st.spinner("Reading resume and analyzing fit..."):
@@ -160,19 +169,31 @@ if analyze:
         ])
 
         with tabs[0]:
-            for item in result.get("strengths", []):
+            strengths = result.get("strengths", [])
+            if not strengths:
+                st.info("No strengths returned.")
+            for item in strengths:
                 st.write(f"- {item}")
 
         with tabs[1]:
-            for item in result.get("must_fix_gaps", []):
+            must_fix = result.get("must_fix_gaps", [])
+            if not must_fix:
+                st.info("No must-fix gaps returned.")
+            for item in must_fix:
                 st.write(f"- {item}")
 
         with tabs[2]:
-            for item in result.get("nice_to_have_gaps", []):
+            nice_to_have = result.get("nice_to_have_gaps", [])
+            if not nice_to_have:
+                st.info("No nice-to-have gaps returned.")
+            for item in nice_to_have:
                 st.write(f"- {item}")
 
         with tabs[3]:
-            for item in result.get("ats_keywords_to_add", []):
+            keywords = result.get("ats_keywords_to_add", [])
+            if not keywords:
+                st.info("No ATS keywords returned.")
+            for item in keywords:
                 st.write(f"- {item}")
 
         with tabs[4]:
@@ -190,16 +211,44 @@ if analyze:
                 st.divider()
 
         with tabs[5]:
-            for item in result.get("section_suggestions", []):
+            sections = result.get("section_suggestions", [])
+            if not sections:
+                st.info("No section suggestions returned.")
+            for item in sections:
                 st.write(f"- {item}")
 
         with tabs[6]:
-            for item in result.get("red_flags", []):
+            red_flags = result.get("red_flags", [])
+            if not red_flags:
+                st.info("No red flags returned.")
+            for item in red_flags:
                 st.write(f"- {item}")
 
         with tabs[7]:
             st.json(result)
 
-    except Exception as e:
+        st.divider()
+        st.subheader("Resume Comparison")
 
+        left_col, right_col = st.columns(2)
+
+        with left_col:
+            st.markdown("### Current Resume")
+            if uploaded_resume.name.lower().endswith(".pdf"):
+                try:
+                    st.pdf(uploaded_file_bytes)
+                except Exception:
+                    st.info("PDF preview is not available in this Streamlit version.")
+                    st.text_area("Extracted Resume Text", resume_text, height=700)
+            else:
+                st.text_area("Extracted Resume Text", resume_text, height=700)
+
+        with right_col:
+            st.markdown("### Tailored Resume")
+            tailored_resume_text = result.get("tailored_resume_text", "")
+            if not tailored_resume_text:
+                st.warning("No tailored resume draft was returned.")
+            st.text_area("Improved Resume Draft", tailored_resume_text, height=700)
+
+    except Exception as e:
         st.error(f"Error: {e}")
