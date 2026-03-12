@@ -1,10 +1,9 @@
 import io
 import json
 import os
-from typing import Any
 
 import streamlit as st
-from openai import OpenAI
+from google import genai
 from pypdf import PdfReader
 from docx import Document
 
@@ -81,20 +80,20 @@ Job Description:
 """
 
 
-def call_openai(resume_text: str, job_description: str) -> dict[str, Any]:
-    api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+def call_gemini(resume_text: str, job_description: str) -> dict:
+    api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise ValueError("Missing OPENAI_API_KEY. Add it to Streamlit secrets or your environment.")
+        raise ValueError("Missing GEMINI_API_KEY. Add it to Streamlit secrets or your environment.")
 
-    client = OpenAI(api_key=api_key)
+    client = genai.Client(api_key=api_key)
     prompt = build_prompt(resume_text, job_description)
 
-    response = client.responses.create(
-        model="gpt-5",
-        input=prompt,
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
     )
 
-    text = getattr(response, "output_text", "").strip()
+    text = (response.text or "").strip()
     if not text:
         raise ValueError("Model returned an empty response.")
 
@@ -135,7 +134,7 @@ if analyze:
     try:
         with st.spinner("Reading resume and analyzing fit..."):
             resume_text = extract_resume_text(uploaded_resume)
-            result = call_openai(resume_text, job_description)
+            result = call_gemini(resume_text, job_description)
 
         st.success("Analysis complete.")
 
@@ -202,4 +201,5 @@ if analyze:
             st.json(result)
 
     except Exception as e:
+
         st.error(f"Error: {e}")
