@@ -1,0 +1,205 @@
+import io
+import json
+import os
+from typing import Any
+
+import streamlit as st
+from openai import OpenAI
+from pypdf import PdfReader
+from docx import Document
+
+st.set_page_config(page_title="Resume Fit Agent", page_icon="📄", layout="wide")
+
+
+def read_pdf(file_bytes: bytes) -> str:
+    reader = PdfReader(io.BytesIO(file_bytes))
+    pages = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        pages.append(text)
+    return "\n".join(pages).strip()
+
+
+def read_docx(file_bytes: bytes) -> str:
+    doc = Document(io.BytesIO(file_bytes))
+    return "\n".join(p.text for p in doc.paragraphs).strip()
+
+
+def extract_resume_text(uploaded_file) -> str:
+    file_bytes = uploaded_file.getvalue()
+    name = uploaded_file.name.lower()
+
+    if name.endswith(".pdf"):
+        return read_pdf(file_bytes)
+    if name.endswith(".docx"):
+        return read_docx(file_bytes)
+    if name.endswith(".txt"):
+        return file_bytes.decode("utf-8", errors="ignore")
+
+    raise ValueError("Unsupported file type. Please upload PDF, DOCX, or TXT.")
+
+
+def build_prompt(resume_text: str, job_description: str) -> str:
+    return f"""
+You are a strict resume-job fit evaluator.
+
+Analyze the candidate resume against the job description.
+
+Rules:
+- Do not fabricate experience.
+- Do not recommend lying.
+- Keep suggestions truthful and ATS-friendly.
+- Highlight what is missing, weak, or vague.
+- Rewrite bullets only based on the existing resume content.
+- Be direct and practical.
+
+Return valid JSON only with this schema:
+{{
+  "fit_score": 0,
+  "summary": "",
+  "strengths": [""],
+  "must_fix_gaps": [""],
+  "nice_to_have_gaps": [""],
+  "ats_keywords_to_add": [""],
+  "bullet_rewrites": [
+    {{
+      "original": "",
+      "improved": "",
+      "reason": ""
+    }}
+  ],
+  "section_suggestions": [""],
+  "red_flags": [""],
+  "final_verdict": ""
+}}
+
+Resume:
+{resume_text}
+
+Job Description:
+{job_description}
+"""
+
+
+def call_openai(resume_text: str, job_description: str) -> dict[str, Any]:
+    api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("Missing OPENAI_API_KEY. Add it to Streamlit secrets or your environment.")
+
+    client = OpenAI(api_key=api_key)
+    prompt = build_prompt(resume_text, job_description)
+
+    response = client.responses.create(
+        model="gpt-5",
+        input=prompt,
+    )
+
+    text = getattr(response, "output_text", "").strip()
+    if not text:
+        raise ValueError("Model returned an empty response.")
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise ValueError("Could not parse model output as JSON.")
+
+
+st.title("📄 Resume Fit Agent")
+st.caption("Upload your resume, paste a job description, and get fit analysis plus resume improvement suggestions.")
+
+with st.sidebar:
+    st.header("How to use")
+    st.write("1. Upload your resume")
+    st.write("2. Paste the job description from Indeed")
+    st.write("3. Click Analyze")
+    st.write("4. Review gaps, keywords, and bullet rewrites")
+
+uploaded_resume = st.file_uploader("Upload resume", type=["pdf", "docx", "txt"])
+job_description = st.text_area("Paste the job description here", height=300, placeholder="Paste the full Indeed job description here...")
+
+analyze = st.button("Analyze fit", type="primary", use_container_width=True)
+
+if analyze:
+    if not uploaded_resume:
+        st.error("Please upload a resume first.")
+        st.stop()
+
+    if not job_description.strip():
+        st.error("Please paste the job description.")
+        st.stop()
+
+    try:
+        with st.spinner("Reading resume and analyzing fit..."):
+            resume_text = extract_resume_text(uploaded_resume)
+            result = call_openai(resume_text, job_description)
+
+        st.success("Analysis complete.")
+
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.metric("Fit score", f"{result.get('fit_score', 'N/A')}/100")
+            st.subheader("Final verdict")
+            st.write(result.get("final_verdict", "No verdict returned."))
+
+        with col2:
+            st.subheader("Summary")
+            st.write(result.get("summary", "No summary returned."))
+
+        tabs = st.tabs([
+            "Strengths",
+            "Must fix",
+            "Nice to have",
+            "ATS keywords",
+            "Bullet rewrites",
+            "Sections",
+            "Red flags",
+            "Raw JSON",
+        ])
+
+        with tabs[0]:
+            for item in result.get("strengths", []):
+                st.write(f"- {item}")
+
+        with tabs[1]:
+            for item in result.get("must_fix_gaps", []):
+                st.write(f"- {item}")
+
+        with tabs[2]:
+            for item in result.get("nice_to_have_gaps", []):
+                st.write(f"- {item}")
+
+        with tabs[3]:
+            for item in result.get("ats_keywords_to_add", []):
+                st.write(f"- {item}")
+
+        with tabs[4]:
+            rewrites = result.get("bullet_rewrites", [])
+            if not rewrites:
+                st.info("No rewrites returned.")
+            for idx, item in enumerate(rewrites, start=1):
+                st.markdown(f"**Rewrite {idx}**")
+                st.write("Original:")
+                st.code(item.get("original", ""))
+                st.write("Improved:")
+                st.code(item.get("improved", ""))
+                st.write("Reason:")
+                st.write(item.get("reason", ""))
+                st.divider()
+
+        with tabs[5]:
+            for item in result.get("section_suggestions", []):
+                st.write(f"- {item}")
+
+        with tabs[6]:
+            for item in result.get("red_flags", []):
+                st.write(f"- {item}")
+
+        with tabs[7]:
+            st.json(result)
+
+    except Exception as e:
+        st.error(f"Error: {e}")
